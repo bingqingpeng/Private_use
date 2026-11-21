@@ -486,19 +486,19 @@ var G_PROXY_A = {
 "peing.net":1,"pekingduck.org":1,"pen.io":1,"pendrivelinux.com":1
 };
 var CUSTOM = [
-118,105,100,99,122,31,11,29,20,28,1,20,16,31,6,26,
-26,5,31,23,25,23,28,23,28,8,121,120,100,116,116,14,
-30,28,20,9,25,31,18,5,31,29,0,28,31,17,31,17,
-25,17,11,104,100,124,106,102,114,28,55,89,72,90,2,78,
-77,1,70,66,11,88,75,91,5,79,78,89,90,11,69,68,
-55,78,67,95,68,88,76,1,71,74,72,79,5,77,66,88,
-69,91,77,11,69,72,69,5,77,66,88,69,91,77,11,69,
-72,69,68,95,69,69,89,87,3,66,79,83,64,92,72,5,
-72,72,88,3,66,79,83,64,92,72,5,69,66,2,72,76,
-82,79,93,75,75,88,95,72,90,92,11,69,72,69,5,77,
-66,88,69,91,77,86,82,70,92,92,89,5,79,66,67,3,
-66,79,83,64,92,72,94,95,72,92,76,74,72,83,77,71,
-94,5,79,66,67
+117,116,104,112,112,10,26,21,31,0,30,19,30,9,27,25,
+4,24,22,26,22,22,21,29,7,123,102,105,96,127,13,31,
+22,23,8,22,30,17,4,24,28,3,29,21,18,30,30,25,
+18,10,111,101,127,107,108,113,29,56,88,75,91,5,79,78,
+0,76,65,10,87,74,88,4,72,79,90,91,1,70,69,56,
+79,64,94,67,89,79,0,77,73,73,64,4,78,67,95,68,
+88,76,1,70,73,74,4,78,67,95,68,88,76,1,70,73,
+74,69,92,68,66,88,84,2,72,76,82,79,93,75,4,79,
+73,91,2,72,76,82,79,93,75,4,66,67,1,73,70,81,
+78,82,74,72,89,88,73,89,93,1,70,73,74,4,78,67,
+95,68,88,76,92,81,71,83,93,90,4,72,67,64,2,72,
+76,82,79,93,75,95,88,73,95,77,64,75,82,66,70,93,
+4,72,67,64
 ];
 var G_PROXY_B = {
 "penguin.com.au":1,"pentoy.hk":1,"peoplenews.tw":1,"peopo.org":1,"perfect-privacy.com":1,"periscope.tv":1,
@@ -841,6 +841,16 @@ var HOSTMAPS = [USER_HOSTS[0], USER_HOSTS[1], G_DIRECT, G_PROXY_A];
 var RULES = [buildIndex(USER_RULES[0]), buildIndex(USER_RULES[1]),
              buildIndex(compileRules(G_RULES[0])), buildIndex(compileRules(G_RULES[1]))];
 
+/* Drop the build-time tables: the merged map and the compiled indexes above are
+ * the only things needed from here on. JScript frees them at its own pace, so
+ * this is about making them collectable, not about a measurable saving. */
+G_PROXY_B = null;
+G_RULES = null;
+CUSTOM = null;
+FIELDS = null;
+USER_RULES = null;
+USER_HOSTS = null;
+
 /* Probe the suffix table: "a.b.example.com" -> a.b.example.com, b.example.com, ... */
 function hasSuffix(map, host) {
     var s = host;
@@ -919,11 +929,10 @@ function matchList(list, url, cache) {
     return false;
 }
 
-function matchUrl(index, url, host) {
+function matchUrl(index, url, host, cache) {
     if (index.open.length === 0 && !index.hasPrefix && !index.hasSuffix) {
         return false;
     }
-    var cache = {low: null};
     var list;
     var s;
     var dot;
@@ -954,13 +963,42 @@ function matchUrl(index, url, host) {
     }
 }
 
-function FindProxyForURL(url, host) {
-    /* ABP rules are case-insensitive; browsers usually lowercase host, don't rely on it */
-    host = host.toLowerCase();
+/* Lower-case and drop a trailing dot.
+ *
+ * WinHTTP keeps the case the caller used, so the lower-casing cannot be skipped.
+ * A trailing dot ("example.com.") is the legal fully-qualified form; Windows passes
+ * it through unchanged, and without this the suffix table would never match, so
+ * https://github.com./ would go direct while https://github.com/ is proxied.
+ */
+function normalizeHost(host) {
+    var end = host.length;
+    while (end > 1 && host.charCodeAt(end - 1) === 46) {   /* 46 = '.' */
+        end--;
+    }
+    if (end !== host.length) {
+        host = host.substring(0, end);
+    }
+    return host.toLowerCase();
+}
+
+function decide(url, host) {
+    /* One lowercased-URL cache for all four buckets: the value is the same for
+     * every bucket, and only the buckets that reach a literal rule pay for it. */
+    var cache = {low: null};
     for (var i = 0; i < 4; i++) {
-        if (hasSuffix(HOSTMAPS[i], host) || matchUrl(RULES[i], url, host)) {
+        if (hasSuffix(HOSTMAPS[i], host) || matchUrl(RULES[i], url, host, cache)) {
             return DECISIONS[i];
         }
     }
     return DIRECT;
+}
+
+function FindProxyForURL(url, host) {
+    try {
+        return decide(url, normalizeHost(host));
+    } catch (e) {
+        /* Windows reports an exception to the calling program as an error instead of
+         * falling back to DIRECT, which would break every request in that process. */
+        return DIRECT;
+    }
 }
